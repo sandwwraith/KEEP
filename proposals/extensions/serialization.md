@@ -218,13 +218,13 @@ User should be able to provide custom implementation for `serialize` and `deseri
 
 During generation of implementation methods, compiler plugin needs to chose concrete method to call from group of `(en|de)codeXxxElementValue`. If current property has primitive non-nullable type, like `Int` or `String`, then it is possible to call matched by signature method directly. If it has nullable and/or complex `E`, compiler plugin uses following rules to find serializer for `E` and then call `(en|de)codeSerializableElementValue`:
 
+1. If current property annotated with `@Serializable(with=T::class)`, construct and use instance of `T` as serializer for `E`.
 1. If `E` is a type parameter, use corresponding serializer passed in constructor.
 1. If `E` is a primitive type (boxed for some reason), use corresponding pre-defined serializer from runtime library.
 2. If `E = V?` – nullable type, find serializer for `V` and adapt it with `NullableSerializer` from runtime.
 1. If `E` is on of supported types from standard library: `Array, (Mutable)List, ArrayList, (Mutable)Set, LinkedHashSet, (Mutable)Map, LinkedHashMap, Pair, Triple` then find serializer for its generic arguments and construct corresponding serializer from runtime.
 1. If `E` is a user type annotated with `@Serializable`, construct and use its `$serializer`.
 1. If `E` is a user type annotated with `@Serializable(with=T::class)`, construct and use instance of `T` as serializer.
-1. If current property annotated with `@Serializable(with=T::class)`, construct and use instance of `T` as serializer for `E`.
 1. If none of the previous rules apply, report a warning and use untyped `writeElementValue(SerialDescriptor, index, Any)` function.
 
 ### Tuning generated code
