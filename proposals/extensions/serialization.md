@@ -192,7 +192,7 @@ interface StructureDecoder: Decoder {
 
 First, let's narrow the scope for now and say that only class can be serializable, not interface, annotation or object.
 
-If compiler plugin has complete control over the class, then it can automatically implement `KSerializer<T>` for class `T` if its every primary constructor parameter is `val` or `var` – since it is impossible to save them to restore later. In this case we called **internal** serialization, plugin injects special synthetic constructor into the class to be able to correctly initialize its private and/or body properties. Delegated properties are not supported (they can be safely excluded from the process).
+If compiler plugin has complete control over the class, then it can automatically implement `KSerializer<T>` for class `T` if its every primary constructor parameter is `val` or `var` – since parameters which are not properties are impossible to save for restoring later. In this case (we called it **internal** serialization), plugin injects special synthetic constructor into the class to be able to correctly initialize its private and/or body properties. Delegated properties are not supported (they can be safely excluded from the process).
 
 If plugin was asked to generate `KSerializer<T>` without modifying `T` (**external** serialization), then class `T` must have accessible primary constructor. Following properties would be impossible to initialize correctly after deserialization and therefore they are skipped:
 
