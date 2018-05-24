@@ -190,6 +190,8 @@ interface StructureDecoder: Decoder {
 
 ### Requirements
 
+First, let's narrow the scope for now and say that only class can be serializable, not interface, annotation or object.
+
 If compiler plugin has complete control over the class, then it can automatically implement `KSerializer<T>` for class `T` if its every primary constructor parameter is `val` or `var` – since it is impossible to save them to restore later. In this case we called **internal** serialization, plugin injects special synthetic constructor into the class to be able to correctly initialize its private and/or body properties. Delegated properties are not supported (they can be safely excluded from the process).
 
 If plugin was asked to generate `KSerializer<T>` without modifying `T` (**external** serialization), then class `T` must have accessible primary constructor. Following properties would be impossible to initialize correctly after deserialization and therefore they are skipped:
@@ -217,10 +219,26 @@ During generation of implementation methods, compiler plugin needs to chose conc
 1. If `E` is a type parameter, use corresponding serializer passed in constructor.
 1. If `E` is a primitive type (boxed for some reason), use corresponding serializer from runtime library
 2. If `E = V?` – nullable type, find serializer for `V` and adapt it with `NullableSerializer` from runtime.
-1. If `E` is on of supported types from standard library: `Array, (Mutable)List, ArrayList, (Mutable)Set, HashSet, (Mutable)Map, HashMap, Pair, Triple` then find serializer for its generic arguments and use corresponding serializer from runtime.
+1. If `E` is on of supported types from standard library: `Array, (Mutable)List, ArrayList, (Mutable)Set, LinkedHashSet, (Mutable)Map, LinkedHashMap, Pair, Triple` then find serializer for its generic arguments and construct corresponding serializer from runtime.
 1. If `E` is a user type annotated with `@Serializable`, construct and use its `$serializer`.
 1. If `E` is a user type annotated with `@Serializable(with=T::class)`, construct and use instance of `T` as serializer.
 1. If none of the previous rules apply, report a warning and use untyped `writeElementValue(SerialDescriptor, index, Any)` function.
 
 ### Tuning generated code
 
+*todo*
+
+## Open for discussion issues
+
+* Currently `SerializationStrategy + DeserializationStrategy` interface named `KSerializer`, because we have `@Serializer` annotation for generate external serializer. Since it is not used very often, probably it is good idea to make interface `Serializer` and rename annotation?
+* It may be not clear that `Serializer` can do both serialization and deserialization. Maybe we need better name, like `Mapper`?
+* Should user have an ability to manipulate layout and order of calls to encoder from generated code? [#121](https://github.com/Kotlin/kotlinx.serialization/issues/121)
+* Should `@Optional` annotation be applied automatically when property has default value? [#19](https://github.com/Kotlin/kotlinx.serialization/issues/19)
+* Should primitive arrays (ByteArray etc) be treated specially by plugin or should it be burden of format implementation to handle them? [#52](https://github.com/Kotlin/kotlinx.serialization/issues/52)
+
+## Future work
+
+* Implement saving class *shema*, not only the instance of class.
+* Improve serialization of class hierarchies, known as polymorphic. Add better support for `sealed` classes.
+* Implement serialization/deserialization of interfaces.
+* Serializable coroutines and continuations.
