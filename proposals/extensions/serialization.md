@@ -23,7 +23,7 @@ This proposal describes how compiler plugin can be used for this task, and offer
 1. Side code generators does not work well with incremental compilation and it is non-trivial to include them as build phase.
 1. kotlinx.serialization alone requires a lot of boilerplate code.
 
-## API overview
+## Core API overview
 
 At a glance, kotlinx.serialziation tries to provide abstraction over different serialziation formats by exposing API which can encode primitive types one-by-one. Compiler plugin can make proper usage of this API, since it knows everything about which fields a class consists of. In somewhat, this plugin could be equivivalent to [parcelize plugin](android-parcelable.md), but for slighlty bigger API.
 
@@ -51,7 +51,7 @@ interface KSerializer<T>: SerializationStrategy<T>, DeserializationStrategy<T> {
 
 ### Descriptor of serializable entity
 
-> TBD
+> TBA
 
 ### Encoder interfaces
 
@@ -59,12 +59,9 @@ Encoder incapluslates knowledge about output format and storage. This interface 
 
 ```kotlin
 interface Encoder {
-    fun encodeValue(value: Any)
-
     fun encodeNotNullMark()
     fun encodeNull()
 
-    fun encodeNullableValue(value: Any?)
     fun encodeUnit()
     fun encodeBoolean(value: Boolean)
     fun encodeByte(value: Byte)
@@ -76,28 +73,27 @@ interface Encoder {
     fun encodeChar(value: Char)
     fun encodeString(value: String)
 
-    fun <T : Enum<T>> encodeEnum(value: T)
+    fun <E : Enum<E>> encodeEnum(value: E, enumDescriptor: SerialDescriptor)
 
+    // can be defined as extension
     fun <T : Any?> encodeSerializable(strategy: SerializationStrategy<T>, value: T) {
         strategy.serialize(this, value)
     }
 }
 ```
 
-However, this interface is not able to write structured data like classes or collections, because there is no way to express delimeters and metadata about structure itself. 
-`StructureEncoder` serves this purpose. It extends `Encoder` interface with additional methods which accept structure descriptor and current position in structure.
+However, this interface is not able to write composite data like classes, collections or unions, because there is no way to express delimeters and metadata about entity itself. 
+`CompositeEncoder` serves this purpose. It has similar to `Encoder` interface with methods which accept serializable descriptor and current position in structure or case in union. Note that it does not extend `Encoder` because once you've started to write structure, you're not allowed to write primitive values without indices.
 
 ```kotlin
 interface Encoder {
     // in addition to previous methods
-    fun beginStructure(desc: SerialDescriptor, vararg typeArgumentsSerializers: KSerializer<*>): StructuredEncoder
-
-    fun beginCollection(desc: SerialDescriptor, collectionSize: Int, vararg typeArgumentsSerializers: KSerializer<*>): StructuredEncoder
+    fun beginEncodeComposite(desc: SerialDescriptor): CompositeEncoder
 }
 
-interface StructureEncoder: Encoder {
+interface CompositeEncoder {
     // delimeter
-    fun endStructure(desc: SerialDescriptor)
+    fun endEncodeComposite(desc: SerialDescriptor)
 
     fun encodeElementValue(desc: SerialDescriptor, index: Int, value: Any)
     fun encodeNullableElementValue(desc: SerialDescriptor, index: Int, value: Any?)
@@ -113,9 +109,9 @@ interface StructureEncoder: Encoder {
     fun encodeCharElement(desc: SerialDescriptor, index: Int, value: Char)
     fun encodeStringElement(desc: SerialDescriptor, index: Int, value: String)
 
-    fun <T : Enum<T>> encodeEnumElement(desc: SerialDescriptor, index: Int, enumClass: KClass<T>, value: T)
+    fun <E : Enum<E>> encodeEnumElement(desc: SerialDescriptor, index: Int, value: E, enumDescriptor: SerialDescriptor)
 
-    fun <T : Enum<T>> encodeSerializableElement(desc: SerialDescriptor, index: Int, strategy: SerializationStrategy<T>, value: T)
+    fun <T> encodeSerializableElement(desc: SerialDescriptor, index: Int, strategy: SerializationStrategy<T>, value: T)
 }
 ```
 
@@ -130,11 +126,8 @@ interface Decoder {
     // returns true if the following value is not null, false if not null
     fun decodeNotNullMark(): Boolean
     // consumes null, returns null, will be called when decodeNotNullMark() is false
-    fun decodeNull(): Nothing? 
+    fun decodeNull(): Nothing?
 
-    fun decodeValue(): Any
-
-    fun decodeNullable(): Any?
     fun decodeUnit()
     fun decodeBoolean(): Boolean
     fun decodeByte(): Byte
@@ -148,35 +141,32 @@ interface Decoder {
 
     fun <T : Enum<T>> decodeEnum(enumCreator: EnumCreator<T>): T
 
-    fun <T : Any?> decodeSerializableValue(strategy: DeserializationStrategy<T>): T = strategy.deserialize(this)
+    // can be defined as extension
+    fun <T : Any?> decodeSerializable(strategy: DeserializationStrategy<T>): T = strategy.deserialize(this)
 }
 ```
 
-However, an opposite interface for `StructureEncoder` would not be very useful. Primitives in read stream can go in arbitrary order, and besides opposite to `encodeXxxElementValue` methods there is a `readElement` method, which should be called to determine current position in structure.
+However, an opposite interface for `ElementEncoder` would not be very useful. Primitives in read stream can go in arbitrary order, and besides opposite to `encodeXxxElement` methods there is a `decodeElementIndex` method, which should be called to determine current position in structure.
 
 ```kotlin
 interface Decoder {
-    fun beginStructure(desc: SerialDescriptor, vararg typeParams: KSerializer<*>): StructureDecoder
-    fun beginCollection(desc: SerialDescriptor, vararg typeParams: KSerializer<*>): StructureDecoder
+    fun beginDecodeComposite(desc: SerialDescriptor): CompositeDecoder
 }
 
-interface StructureDecoder: Decoder {
-    fun endStructure(desc: SerialDescriptor)
+interface CompositeDecoder {
+    fun endDecodeComposite(desc: SerialDescriptor)
 
-    // decodeElement results
+    // decodeElementIndex results
     companion object {
         // end of input
         const val READ_DONE = -1
-        // decoder sure that elements go in order, no need to call decodeElement
+        // decoder sure that elements go in order, no need to call decodeElementIndex
         const val READ_ALL = -2
     }
 
     // returns either index or one of READ_XXX constants
-    fun decodeElement(desc: SerialDescriptor): Int
+    fun decodeElementIndex(desc: SerialDescriptor): Int
 
-    fun decodeElementValue(desc: SerialDescriptor, index: Int): Any
-
-    fun decodeNullableElement(desc: SerialDescriptor, index: Int): Any?
     fun decodeUnitElement(desc: SerialDescriptor, index: Int)
     fun decodeBooleanElement(desc: SerialDescriptor, index: Int): Boolean
     fun decodeByteElement(desc: SerialDescriptor, index: Int): Byte
@@ -194,11 +184,15 @@ interface StructureDecoder: Decoder {
 }
 ``` 
 
+### Nullability and Optionality
+
+> These two are different concepts. TBA.
+
 ## Code generation strategy
 
 ### Requirements
 
-First, let's narrow the scope for now and say that only class can be serializable, not interface, annotation or object.
+First, let's narrow the scope for now and say that only class can be serializable, not interface or annotation. (Enum classes and objects would be discussed later).
 
 If compiler plugin has complete control over the class, then it can automatically implement `KSerializer<T>` for class `T` if its every primary constructor parameter is `val` or `var` – since parameters which are not properties are impossible to save for restoring later. In this case (we called it **internal** serialization), plugin injects special synthetic constructor into the class to be able to correctly initialize its private and/or body properties. Delegated properties are not supported (they can be safely excluded from the process).
 
@@ -214,8 +208,8 @@ In case of internal serialization, which is expressed by `@Serializable` annotat
 1. Synthetic constructor for `T` which initializes all state properties including private and body ones.
 1. Nested class with special name `$serializer` which implements `KSerializer<T>`. If `T` has no type arguments, this class would be a singleton. If it has, e.g. `T = T<T0, T1...>` then its constructor will have properties `KSerializer<T0>, KSerializer<T1>, ...`.
 2. Method `T.Companion.serializer()` which returns `$serializer`. If `T` has type arguments (`T = T<T0, T1...>`) then this method will have arguments `KSerializer<T0>, KSerializer<T1>, ...`.
-3. Implementation method `$serializer.serialize(Encoder, T)` which feeds T into Encoder by making consequent calls to `beginStructure`, `encodeXxxElementValue` several times, `endStructure`.
-4. Implementation method `$serializer.deserialize(Decoder): T` which collects variables from Decoder by making calls to `beginStructure`, `decodeElement`, `decodeXxxElementValue` with correct index until end of input, `endStructure`. Then it validates that all primitives were read and constructs T from collected primitives. 
+3. Implementation method `$serializer.serialize(Encoder, T)` which feeds T into Encoder by making consequent calls to `beginStructure`, `encodeXxxElement` several times, `endStructure`.
+4. Implementation method `$serializer.deserialize(Decoder): T` which collects variables from Decoder by making calls to `beginStructure`, `decodeElementIndex`, `decodeXxxElement` with correct index until end of input, `endStructure`. Then it validates that all primitives were read and constructs T from collected primitives. 
 5. Implementation property `$serializer.serialClassDesc` which holds metadata about class.
 
 In case of external serialization, expressed by `@Serializer(forClass=...)` only last three items are done. In `deserialize`, plugin calls primary constructor of class and then all available property setters.
@@ -230,10 +224,17 @@ During generation of implementation methods, compiler plugin needs to chose conc
 1. If `E` is a type parameter, use corresponding serializer passed in constructor.
 1. If `E` is a primitive type (boxed for some reason), use corresponding pre-defined serializer from runtime library.
 2. If `E = V?` – nullable type, find serializer for `V` and adapt it with `NullableSerializer` from runtime library.
-1. If `E` is on of supported types from standard library: `Array, (Mutable)List, ArrayList, (Mutable)Set, LinkedHashSet, (Mutable)Map, LinkedHashMap, Pair, Triple` then find serializer for its generic arguments and construct corresponding serializer from runtime library.
+1. If `E` is on of supported types from standard library, then find serializer for its generic arguments and construct corresponding serializer from runtime library.
 1. If `E` is a user type annotated with `@Serializable`, construct and use its `$serializer`.
 1. If `E` is a user type annotated with `@Serializable(with=T::class)`, construct and use instance of `T` as serializer.
-1. If none of the previous rules apply, report a warning and use untyped `writeElementValue(SerialDescriptor, index, Any)` function.
+1. If none of the previous rules apply, report a compile-time error about unserializable field in class.
+
+### Auto-discovering serializers for standard library types
+
+Serializers located at `kotlinx.serialization.builtins` package can be automatically
+discovered by plugin, when there are no ambiguity – for given `T`, there is only one `KSerializer<T>`. Generic arguments of `T` are not taken into account.
+Currently, this package contains serializers for following types: `Array, (Mutable)List, ArrayList, (Mutable)Set, LinkedHashSet, (Mutable)Map, LinkedHashMap, Pair, Triple`; all primitive types.
+User-defined libraries can also make additions to this package, but use it carefullty and wisely.
 
 ### Tuning generated code
 
